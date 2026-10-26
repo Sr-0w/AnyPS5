@@ -1666,6 +1666,30 @@ static bool InvalidTimes(const KernelTimeval* times) {
     return times != nullptr && (times[0].tv_usec < 0 || times[0].tv_usec >= 1000000 || times[1].tv_usec < 0 || times[1].tv_usec >= 1000000);
 }
 
+static int CopyTimevals(const KernelTimeval* source, KernelTimeval (&copy)[2]) {
+    constexpr auto bytes = sizeof(copy);
+    const auto address = reinterpret_cast<std::uintptr_t>(source);
+    if (address == 0 || bytes > UINTPTR_MAX - address) return SceErrorFromErrno(GUEST_EFAULT);
+    GuestArena::GuestArenaPrepareHostRead_nid_no_patch(source, bytes);
+#ifdef _WIN32
+    SIZE_T copied = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), source, copy, bytes, &copied) || copied != bytes) return SceErrorFromErrno(GUEST_EFAULT);
+#elif defined(__linux__)
+    iovec local{copy, bytes};
+    iovec remote{const_cast<KernelTimeval*>(source), bytes};
+    const auto copied = ::process_vm_readv(::getpid(), &local, 1, &remote, 1, 0);
+    if (copied < 0 && errno != EFAULT) throw std::runtime_error("futimes: process_vm_readv failed with errno " + std::to_string(errno));
+    if (copied < 0 || static_cast<std::size_t>(copied) != bytes) return SceErrorFromErrno(GUEST_EFAULT);
+#elif defined(__APPLE__)
+    mach_vm_size_t copied = 0;
+    if (::mach_vm_read_overwrite(::mach_task_self(), reinterpret_cast<mach_vm_address_t>(source), bytes,
+            reinterpret_cast<mach_vm_address_t>(&copy[0]), &copied) != KERN_SUCCESS || copied != bytes) return SceErrorFromErrno(GUEST_EFAULT);
+#else
+    throw std::runtime_error("futimes: checked guest copies are not implemented on this host");
+#endif
+    return 0;
+}
+
 int APS5_VABI sceKernelTruncate_nid_postfix(const char* path, std::int64_t length) {
     if (length < 0) return SceErrorFromErrno(GUEST_EINVAL);
     std::string copy;
@@ -1729,14 +1753,15 @@ int APS5_VABI lutimes_nid_postfix(const char* path, const KernelTimeval* times) 
 }
 
 int APS5_VABI sceKernelFutimes(int d, const KernelTimeval* times) {
+    KernelTimeval copied[2]{};
+    if (times != nullptr) {
+        if (const int error = CopyTimevals(times, copied)) return error;
+        times = copied;
+    }
+    if (InvalidTimes(times)) return SceErrorFromErrno(GUEST_EINVAL);
     if (File::IsVirtualDirectoryDescriptor(d)) return SceErrorFromErrno(GUEST_EISDIR);
     if (GuestSockets::IsOpen(d)) return SceErrorFromErrno(GUEST_EINVAL);
     File::RefuseArchivedFile(d, "futimes");
-    if (times != nullptr) {
-        for (int i = 0; i < 2; ++i) {
-            if (times[i].tv_usec < 0 || times[i].tv_usec >= 1000000) return SceErrorFromErrno(GUEST_EINVAL);
-        }
-    }
     if (NativeFutimes(d, times) != 0) return SceErrorFromErrno(errno);
     return 0;
 }
