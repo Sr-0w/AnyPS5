@@ -217,6 +217,15 @@ public:
     char* Crossing() const { return memory + page - 3; }
     char* Boundary() const { return memory + page - 2; }
 
+    void MakeReadOnly() {
+#ifdef _WIN32
+        DWORD previous = 0;
+        Require(VirtualProtect(memory, page, PAGE_READONLY, &previous) != 0);
+#else
+        Require(mprotect(memory, page, PROT_READ) == 0);
+#endif
+    }
+
 private:
     char* memory = nullptr;
     std::size_t page = 0;
@@ -404,6 +413,58 @@ void CheckSettimeofday() {
     Require(gettimeofday_nid_postfix(nullptr, &zone) == 0 && zone.tz_minuteswest == 0 && zone.tz_dsttime == 0);
 }
 
+void CheckSettimeofdayInputs() {
+    const KernelTimezone initial{60, 1};
+    Require(settimeofday_nid_postfix(nullptr, &initial) == 0);
+    const auto unchanged = [&] {
+        KernelTimezone zone{};
+        Require(gettimeofday_nid_postfix(nullptr, &zone) == 0);
+        Require(zone.tz_minuteswest == initial.tz_minuteswest && zone.tz_dsttime == initial.tz_dsttime);
+    };
+    const auto fault = [&](const KernelTimeval* time, const KernelTimezone* zone) {
+        *__error_nid_postfix() = 77;
+        Require(settimeofday_nid_postfix(time, zone) == -1 && Error() == 14);
+        unchanged();
+    };
+    GuardedPaths memory;
+    const KernelTimeval valid{1000000000, 123456};
+    const KernelTimeval invalid{-1, 0};
+    const KernelTimezone replacement{-120, 2};
+    const auto* badTime = reinterpret_cast<const KernelTimeval*>(memory.Unreadable());
+    const auto* badZone = reinterpret_cast<const KernelTimezone*>(memory.Unreadable());
+    fault(badTime, nullptr);
+    fault(badTime, &replacement);
+    fault(badTime, badZone);
+    fault(nullptr, badZone);
+    fault(&valid, badZone);
+    fault(&invalid, badZone);
+    const auto* crossingTime = reinterpret_cast<const KernelTimeval*>(memory.Unreadable() - sizeof(valid) / 2);
+    std::memcpy(const_cast<KernelTimeval*>(crossingTime), &invalid, sizeof(valid) / 2);
+    fault(crossingTime, &replacement);
+    const auto* crossingZone = reinterpret_cast<const KernelTimezone*>(memory.Crossing());
+    std::memcpy(memory.Crossing(), &replacement, 3);
+    fault(nullptr, crossingZone);
+    fault(&valid, crossingZone);
+    fault(&invalid, crossingZone);
+    fault(reinterpret_cast<const KernelTimeval*>(UINTPTR_MAX - sizeof(valid) / 2), nullptr);
+    fault(nullptr, reinterpret_cast<const KernelTimezone*>(UINTPTR_MAX - sizeof(replacement) / 2));
+    const auto* boundaryTime = reinterpret_cast<const KernelTimeval*>(memory.Unreadable() - sizeof(valid));
+    std::memcpy(const_cast<KernelTimeval*>(boundaryTime), &valid, sizeof(valid));
+    memory.MakeReadOnly();
+    Require(ThrowsNaming([&] { settimeofday_nid_postfix(boundaryTime, &replacement); }, "1000000000.123456"));
+    unchanged();
+    GuardedPaths zoneMemory;
+    const auto* boundaryZone = reinterpret_cast<const KernelTimezone*>(zoneMemory.Unreadable() - sizeof(replacement));
+    std::memcpy(const_cast<KernelTimezone*>(boundaryZone), &replacement, sizeof(replacement));
+    zoneMemory.MakeReadOnly();
+    *__error_nid_postfix() = 77;
+    Require(settimeofday_nid_postfix(nullptr, boundaryZone) == 0 && Error() == 77);
+    KernelTimezone zone{};
+    Require(gettimeofday_nid_postfix(nullptr, &zone) == 0 && zone.tz_minuteswest == -120 && zone.tz_dsttime == 2);
+    const KernelTimezone reset{0, 0};
+    Require(settimeofday_nid_postfix(nullptr, &reset) == 0);
+}
+
 void DirectoryRenameTests(const std::filesystem::path& parent) {
     const auto fixture = parent / "directory-identity";
     const auto original = fixture / "original";
@@ -548,7 +609,12 @@ void CheckPipePathconf(F fn) {
     Require(close_nid_postfix(ends[0]) == 0 && close_nid_postfix(ends[1]) == 0);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc == 2 && std::strcmp(argv[1], "settimeofday") == 0) {
+        CheckSettimeofday();
+        CheckSettimeofdayInputs();
+        return 0;
+    }
 #ifdef _WIN32
     auto hostDirectorySpelling = std::filesystem::current_path().native();
     CharUpperBuffW(hostDirectorySpelling.data(), static_cast<DWORD>(hostDirectorySpelling.size()));

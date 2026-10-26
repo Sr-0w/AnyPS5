@@ -668,18 +668,25 @@ int APS5_VABI clock_settime_nid_postfix(int clockId, const KernelTimespec* tp) {
 }
 
 int SetTimeOfDay_nid_no_patch(const KernelTimeval* tv, const KernelTimezone* tz) {
-    if (tv != nullptr && (tv->tv_usec < 0 || tv->tv_usec >= 1000000 || tv->tv_sec < 0)) {
+    KernelTimeval time{};
+    KernelTimezone zone{};
+    if ((tv != nullptr && !GuestCopyIn_nid_no_patch(&time, tv, sizeof(time))) ||
+        (tz != nullptr && !GuestCopyIn_nid_no_patch(&zone, tz, sizeof(zone)))) {
+        *__error_nid_postfix() = GUEST_EFAULT;
+        return -1;
+    }
+    if (tv != nullptr && (time.tv_usec < 0 || time.tv_usec >= 1000000 || time.tv_sec < 0)) {
         *__error_nid_postfix() = GUEST_EINVAL;
         return -1;
     }
     if (tv != nullptr) {
         char requested[48];
-        std::snprintf(requested, sizeof(requested), "%lld.%06lld", static_cast<long long>(tv->tv_sec), static_cast<long long>(tv->tv_usec));
+        std::snprintf(requested, sizeof(requested), "%lld.%06lld", static_cast<long long>(time.tv_sec), static_cast<long long>(time.tv_usec));
         throw std::runtime_error(std::string("settimeofday: setting the time to ") + requested + " is not supported, the host clock is not changed");
     }
     if (tz != nullptr) {
         std::lock_guard lock(guestTimezoneMutex);
-        guestTimezone = *tz;
+        guestTimezone = zone;
     }
     return 0;
 }

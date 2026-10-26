@@ -384,6 +384,8 @@ if(BUILD_TESTING)
     target_link_libraries(guest_kernel_sys_tests PRIVATE libkernel_sys libkernel libc)
     configure_windows_unwind(guest_kernel_sys_tests)
     add_test(NAME guest_kernel_sys COMMAND guest_kernel_sys_tests)
+    add_test(NAME guest_settimeofday_inputs COMMAND guest_kernel_sys_tests settimeofday)
+    set_tests_properties(guest_settimeofday_inputs PROPERTIES TIMEOUT 20)
     add_test_executable(guest_kernel_sys_thread_defaults_tests tests/GuestKernelSysThreadDefaults.cpp)
     target_include_directories(guest_kernel_sys_thread_defaults_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(guest_kernel_sys_thread_defaults_tests PRIVATE libkernel_sys libkernel libc)
@@ -422,7 +424,7 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/nid/tests/test_verneed.py $<TARGET_FILE:nid_patcher>)
     endif()
     if(WIN32)
-        set_tests_properties(guest_kernel_sys guest_kernel_sys_thread_defaults guest_kernel_sys_barrier guest_kernel_sys_pthread guest_kernel_sys_constants PROPERTIES ENVIRONMENT_MODIFICATION
+        set_tests_properties(guest_kernel_sys guest_settimeofday_inputs guest_kernel_sys_thread_defaults guest_kernel_sys_barrier guest_kernel_sys_pthread guest_kernel_sys_constants PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libkernel_sys>")
     endif()
     add_test_executable(guest_kernel_sys_threads_tests tests/GuestKernelSysThreads.cpp

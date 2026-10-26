@@ -804,6 +804,13 @@ extern "C" std::filesystem::path ResolveArchivedPath_nid_no_patch(const char* pa
     return ResolveLocked(path, module, true);
 }
 
+extern "C" bool GuestCopyIn_nid_no_patch(void* destination, const void* source, std::size_t bytes) {
+    if (bytes == 0) return true;
+    const auto start = reinterpret_cast<std::uintptr_t>(source);
+    if (start == 0 || bytes > UINTPTR_MAX - start) return false;
+    return CopyGuestBytes(destination, source, bytes);
+}
+
 extern "C" bool GuestCopyOut_nid_no_patch(void* destination, const void* source, std::size_t bytes) {
     if (bytes == 0) return true;
     const auto start = reinterpret_cast<std::uintptr_t>(destination);
