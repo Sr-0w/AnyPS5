@@ -404,6 +404,37 @@ void CheckSettimeofday() {
     Require(gettimeofday_nid_postfix(nullptr, &zone) == 0 && zone.tz_minuteswest == 0 && zone.tz_dsttime == 0);
 }
 
+void CheckSettimeofdayUnreadable() {
+    constexpr int Fault = 14;
+    GuardedPaths memory;
+    const auto* badTime = reinterpret_cast<const KernelTimeval*>(memory.Unreadable());
+    const auto* crossingTime = reinterpret_cast<const KernelTimeval*>(memory.Crossing());
+    const auto* badZone = reinterpret_cast<const KernelTimezone*>(memory.Unreadable());
+    const auto* crossingZone = reinterpret_cast<const KernelTimezone*>(memory.Crossing());
+    const KernelTimezone west{60, 1};
+    const KernelTimeval valid{1000000000, 0};
+    const KernelTimeval invalid{0, 1000000};
+    KernelTimezone zone{-1, -1};
+    Require(settimeofday_nid_postfix(nullptr, &west) == 0);
+    for (const KernelTimeval* time : {badTime, crossingTime}) {
+        *__error_nid_postfix() = 0;
+        Require(settimeofday_nid_postfix(time, nullptr) == -1 && Error() == Fault);
+        *__error_nid_postfix() = 0;
+        Require(settimeofday_nid_postfix(time, &west) == -1 && Error() == Fault);
+    }
+    for (const KernelTimezone* bad : {badZone, crossingZone}) {
+        *__error_nid_postfix() = 0;
+        Require(settimeofday_nid_postfix(nullptr, bad) == -1 && Error() == Fault);
+        *__error_nid_postfix() = 0;
+        Require(settimeofday_nid_postfix(&invalid, bad) == -1 && Error() == Fault);
+        *__error_nid_postfix() = 0;
+        Require(settimeofday_nid_postfix(&valid, bad) == -1 && Error() == Fault);
+    }
+    Require(gettimeofday_nid_postfix(nullptr, &zone) == 0 && zone.tz_minuteswest == 60 && zone.tz_dsttime == 1);
+    const KernelTimezone zero{0, 0};
+    Require(settimeofday_nid_postfix(nullptr, &zero) == 0);
+}
+
 void DirectoryRenameTests(const std::filesystem::path& parent) {
     const auto fixture = parent / "directory-identity";
     const auto original = fixture / "original";
@@ -744,6 +775,7 @@ int main() {
     Require(link_nid_postfix(original.c_str(), "") == -1 && Error() == 2);
     Require(std::filesystem::remove(linked) && std::filesystem::hard_link_count(original) == 1);
     CheckSettimeofday();
+    CheckSettimeofdayUnreadable();
     const int directory = sceKernelOpen(root.string().c_str(), SCE_KERNEL_O_RDONLY | SCE_KERNEL_O_DIRECTORY, 0);
     Require(directory >= 0);
     const int fileDescriptor = sceKernelOpen(file.c_str(), SCE_KERNEL_O_RDONLY, 0);

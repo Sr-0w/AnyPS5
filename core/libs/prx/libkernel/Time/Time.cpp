@@ -8,6 +8,7 @@
 #include "prx/libkernel/Pthread/include/Cancel.hpp"
 
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
 #include "prx/libkernel/Pthread/include/Pthread.hpp"
 #include <algorithm>
@@ -35,10 +36,14 @@
 #include <sys/times.h>
 #include <unistd.h>
 #ifdef __linux__
+#include <sys/uio.h>
 #include <dlfcn.h>
 #include <link.h>
 #include <pthread.h>
 #include <sched.h>
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #endif // __linux__
 #endif
 
@@ -653,33 +658,62 @@ int APS5_VABI clock_getres_nid_postfix(int clockId, KernelTimespec* res) {
 #endif
 }
 
+static bool CopyIn(void* destination, const void* source, std::size_t bytes) {
+    const auto start = reinterpret_cast<std::uintptr_t>(source);
+    if (start == 0 || bytes > UINTPTR_MAX - start) return false;
+    GuestArena::GuestArenaPrepareHostRead_nid_no_patch(source, bytes);
+#ifdef _WIN32
+    SIZE_T copied = 0;
+    return ReadProcessMemory(GetCurrentProcess(), source, destination, bytes, &copied) != 0 && copied == bytes;
+#elif defined(__linux__)
+    iovec local{destination, bytes};
+    iovec remote{const_cast<void*>(source), bytes};
+    const auto copied = ::process_vm_readv(::getpid(), &local, 1, &remote, 1, 0);
+    if (copied < 0 && errno != EFAULT) throw std::runtime_error("time: process_vm_readv failed with errno " + std::to_string(errno));
+    return copied >= 0 && static_cast<std::size_t>(copied) == bytes;
+#elif defined(__APPLE__)
+    mach_vm_size_t copied = 0;
+    return ::mach_vm_read_overwrite(::mach_task_self(), reinterpret_cast<mach_vm_address_t>(source), bytes,
+        reinterpret_cast<mach_vm_address_t>(destination), &copied) == KERN_SUCCESS && copied == bytes;
+#else
+    throw std::runtime_error("time: checked guest reads are not implemented on this host");
+#endif
+}
+
 int APS5_VABI clock_settime_nid_postfix(int clockId, const KernelTimespec* tp) {
-    if (tp == nullptr) {
+    KernelTimespec time{};
+    if (!CopyIn(&time, tp, sizeof(time))) {
         *__error_nid_postfix() = GUEST_EFAULT;
         return -1;
     }
-    if (clockId != GUEST_CLOCK_REALTIME || tp->tv_nsec < 0 || tp->tv_nsec >= 1000000000 || tp->tv_sec < 0) {
+    if (clockId != GUEST_CLOCK_REALTIME || time.tv_nsec < 0 || time.tv_nsec >= 1000000000 || time.tv_sec < 0) {
         *__error_nid_postfix() = GUEST_EINVAL;
         return -1;
     }
     char requested[48];
-    std::snprintf(requested, sizeof(requested), "%lld.%09lld", static_cast<long long>(tp->tv_sec), static_cast<long long>(tp->tv_nsec));
+    std::snprintf(requested, sizeof(requested), "%lld.%09lld", static_cast<long long>(time.tv_sec), static_cast<long long>(time.tv_nsec));
     throw std::runtime_error(std::string("clock_settime: setting CLOCK_REALTIME to ") + requested + " is not supported, the host clock is not changed");
 }
 
 int SetTimeOfDay_nid_no_patch(const KernelTimeval* tv, const KernelTimezone* tz) {
-    if (tv != nullptr && (tv->tv_usec < 0 || tv->tv_usec >= 1000000 || tv->tv_sec < 0)) {
+    KernelTimeval time{};
+    KernelTimezone zone{};
+    if ((tv != nullptr && !CopyIn(&time, tv, sizeof(time))) || (tz != nullptr && !CopyIn(&zone, tz, sizeof(zone)))) {
+        *__error_nid_postfix() = GUEST_EFAULT;
+        return -1;
+    }
+    if (tv != nullptr && (time.tv_usec < 0 || time.tv_usec >= 1000000 || time.tv_sec < 0)) {
         *__error_nid_postfix() = GUEST_EINVAL;
         return -1;
     }
     if (tv != nullptr) {
         char requested[48];
-        std::snprintf(requested, sizeof(requested), "%lld.%06lld", static_cast<long long>(tv->tv_sec), static_cast<long long>(tv->tv_usec));
+        std::snprintf(requested, sizeof(requested), "%lld.%06lld", static_cast<long long>(time.tv_sec), static_cast<long long>(time.tv_usec));
         throw std::runtime_error(std::string("settimeofday: setting the time to ") + requested + " is not supported, the host clock is not changed");
     }
     if (tz != nullptr) {
         std::lock_guard lock(guestTimezoneMutex);
-        guestTimezone = *tz;
+        guestTimezone = zone;
     }
     return 0;
 }

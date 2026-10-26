@@ -10,6 +10,12 @@
 #include <cstring>
 #include <ctime>
 #include <stdexcept>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 static constexpr int SCE_OK = 0;
 
@@ -261,6 +267,37 @@ static void SettimeValidatesLikeFreebsd() {
     Require(SettimeThrows(KernelTimespec{1, NANOS_PER_SECOND - 1}, "1.999999999"));
 }
 
+static void SettimeFaultsBeforeValidation() {
+#ifdef _WIN32
+    SYSTEM_INFO info{};
+    GetSystemInfo(&info);
+    const std::size_t page = info.dwPageSize;
+    auto* memory = static_cast<char*>(VirtualAlloc(nullptr, 2 * page, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    Require(memory != nullptr);
+    DWORD previous = 0;
+    Require(VirtualProtect(memory + page, page, PAGE_NOACCESS, &previous) != 0);
+#else
+    const long size = sysconf(_SC_PAGESIZE);
+    Require(size > 0);
+    const auto page = static_cast<std::size_t>(size);
+    auto* memory = static_cast<char*>(mmap(nullptr, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    Require(memory != MAP_FAILED);
+    Require(mprotect(memory + page, page, PROT_NONE) == 0);
+#endif
+    const std::int64_t seconds = 1767225600;
+    std::memcpy(memory + page - sizeof(seconds), &seconds, sizeof(seconds));
+    const auto* unreadable = reinterpret_cast<const KernelTimespec*>(memory + page);
+    const auto* crossing = reinterpret_cast<const KernelTimespec*>(memory + page - sizeof(seconds));
+    for (const KernelTimespec* time : {unreadable, crossing})
+        for (const int clockId : {GUEST_CLOCK_REALTIME, GUEST_CLOCK_MONOTONIC, GUEST_CLOCK_PROCESS_CPUTIME_ID, -1})
+            RequireSettimeError(clockId, time, 14);
+#ifdef _WIN32
+    Require(VirtualFree(memory, 0, MEM_RELEASE) != 0);
+#else
+    Require(munmap(memory, 2 * page) == 0);
+#endif
+}
+
 static std::int32_t RuntimeDaylight(std::int32_t daylight) {
 #ifdef _WIN32
     long bias = 0;
@@ -306,6 +343,7 @@ int main() {
     UnsupportedResolutionStillThrows();
     OmittedTimeIsFaultAfterClockValidation();
     SettimeValidatesLikeFreebsd();
+    SettimeFaultsBeforeValidation();
     CalendarConversionsInitializeTheirState();
     CalendarConversionsFollowTheHostZone();
     SecondClockReportsWholeSeconds();
