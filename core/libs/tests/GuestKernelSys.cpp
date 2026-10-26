@@ -609,12 +609,7 @@ void CheckPipePathconf(F fn) {
     Require(close_nid_postfix(ends[0]) == 0 && close_nid_postfix(ends[1]) == 0);
 }
 
-int main(int argc, char* argv[]) {
-    if (argc == 2 && std::strcmp(argv[1], "settimeofday") == 0) {
-        CheckSettimeofday();
-        CheckSettimeofdayInputs();
-        return 0;
-    }
+int main() {
 #ifdef _WIN32
     auto hostDirectorySpelling = std::filesystem::current_path().native();
     CharUpperBuffW(hostDirectorySpelling.data(), static_cast<DWORD>(hostDirectorySpelling.size()));
@@ -810,6 +805,7 @@ int main(int argc, char* argv[]) {
     Require(link_nid_postfix(original.c_str(), "") == -1 && Error() == 2);
     Require(std::filesystem::remove(linked) && std::filesystem::hard_link_count(original) == 1);
     CheckSettimeofday();
+    CheckSettimeofdayInputs();
     const int directory = sceKernelOpen(root.string().c_str(), SCE_KERNEL_O_RDONLY | SCE_KERNEL_O_DIRECTORY, 0);
     Require(directory >= 0);
     const int fileDescriptor = sceKernelOpen(file.c_str(), SCE_KERNEL_O_RDONLY, 0);
