@@ -25,11 +25,13 @@ def main():
         metadata = root / "param.json"
         metadata.write_text(json.dumps({"titleId": "TEST00001", "contentVersion": "01.000.000"}))
         digest = hashlib.sha256(image).hexdigest()
-        def advise(count=1, *options):
-            entry = {"titleId": "TEST00001", "contentVersion": "01.000.000", "patch": "patch.toml", "targets": {"eboot.bin": digest}}
+        def advise(count=1, *options, executable=None):
+            target = "picker/picker.bin" if executable else "eboot.bin"
+            layout = ["--executable", executable] if executable else ["--skip-sce-module"]
+            entry = {"titleId": "TEST00001", "contentVersion": "01.000.000", "patch": "patch.toml", "targets": {target: digest}}
             (catalog / "index.json").write_text(json.dumps({"format": 1, "entries": [entry] * count}))
             result = subprocess.run([sys.executable, str(advisor), "--catalog", str(catalog), "--param-json", str(metadata),
-                                     "--input", str(source), "--relinker", str(relinker), "--skip-sce-module", "--json", *options],
+                                     "--input", str(source), "--relinker", str(relinker), *layout, "--json", *options],
                                     capture_output=True, text=True, timeout=10)
             data = json.loads(result.stdout)
             return result.returncode, data
@@ -50,6 +52,18 @@ def main():
         assert report["entries"][0]["verification"]["exit_code"] == 1, report
         assert "conversion_options" not in report["entries"][0], report
         assert source.read_bytes() == image
+
+        executable = Path("picker") / "picker.bin"
+        (root / executable.parent).mkdir()
+        (root / executable).write_bytes(image)
+        (root / "sce_module").mkdir()
+        patch.write_text(patch_text(address, expected, "secondary", target=executable.as_posix()))
+        for spelling in dict.fromkeys((executable.as_posix(), str(executable))):
+            status, report = advise(executable=spelling)
+            assert status == 0 and report["status"] == "recommended", (spelling, report)
+            record = report["entries"][0]
+            assert record["targets"] == {executable.as_posix(): digest}, record
+            assert record["conversion_options"] == ["--patches", str(patch.resolve()), "--executable", spelling], record
 
 
 if __name__ == "__main__":

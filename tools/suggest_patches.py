@@ -269,7 +269,7 @@ def main(argv=None):
         if not root.is_dir():
             raise ValueError("module parent must be a directory")
         for executable in args.executable:
-            confined(root, executable)
+            confined(root, executable.replace(os.sep, "/"))
         catalog = resolve_path(args.catalog)
         matches = []
         entries = load_catalog(catalog, title, version)
