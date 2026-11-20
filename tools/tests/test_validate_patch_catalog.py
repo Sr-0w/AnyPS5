@@ -142,6 +142,19 @@ class CatalogValidatorTests(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
         self.assertEqual(index.read_text(), content)
 
+    def test_non_finite_catalog_values_are_rejected_during_index_parsing(self):
+        index = self.catalog / "index.json"
+        for token in ("NaN", "Infinity", "-Infinity", "1e999", "-1e999"):
+            with self.subTest(token=token):
+                content = json.dumps({"format": 1, "entries": [dict(self.entry, revision="TOKEN")]})
+                index.write_text(content.replace('"TOKEN"', token), encoding="utf-8")
+                output, errors = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                    result = validate_patch_catalog.main(["--catalog", str(self.catalog), "--json"])
+                self.assertEqual(result, 2)
+                self.assertEqual(json.loads(output.getvalue()), {"error": f"non-finite JSON number: {token}"})
+                self.assertEqual(errors.getvalue(), "")
+
     def test_deeply_nested_index_is_reported_without_traceback(self):
         index = self.catalog / "index.json"
         content = '{"format": 1, "entries": ' + "[" * 200000 + "]" * 200000 + "}"

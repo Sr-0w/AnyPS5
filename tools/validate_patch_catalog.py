@@ -18,7 +18,7 @@ def unique_json_keys(pairs):
 
 def validate(directory, json_output=False):
     try:
-        entries = suggest_patches.read_catalog(directory, object_pairs_hook=unique_json_keys)
+        entries = suggest_patches.read_catalog(directory, object_pairs_hook=unique_json_keys, strict_numbers=True)
     except RecursionError as error:
         raise ValueError("index.json is nested too deeply") from error
     seen_ids = {}
