@@ -276,7 +276,7 @@ def main(argv=None):
         if not entries:
             emit(f"{prefix}: no catalog entry for {title} {version}.")
             return finish(1, "no_match")
-        relinker_errors = False
+        relinker_error = None
         for number, entry in entries:
             record = {"number": number, "patch": entry.get("patch"), "status": "rejected"}
             report["entries"].append(record)
@@ -321,20 +321,21 @@ def main(argv=None):
             verified = tuple(map(int, summary.groups())) if summary else None
             record["verification"] = {"exit_code": result.returncode, "summary": verified,
                                       "stdout": result.stdout, "stderr": result.stderr}
-            if result.returncode:
-                detail = (result.stdout + result.stderr).strip()
-                if result.returncode == 1 and verified and verified[3] > 0:
-                    record["reason"] = "verification_mismatch"
-                    emit(f"{label}: rejected by relinker: {detail}")
-                    continue
-                if result.returncode == 2:
-                    record["reason"] = "relinker_error"
-                    emit(f"{label}: relinker error (exit 2): {detail}")
-                    relinker_errors = True
-                    continue
-                raise ValueError(f"{label}: relinker error (exit {result.returncode}): {detail}")
-            if not verified:
-                raise ValueError(f"{label}: relinker produced no verification summary")
+            if result.returncode == 1 and verified and verified[3] > 0:
+                record["reason"] = "verification_mismatch"
+                emit(f"{label}: rejected by relinker: {(result.stdout + result.stderr).strip()}")
+                continue
+            if result.returncode or not verified:
+                if result.returncode:
+                    detail = (result.stdout + result.stderr).strip()
+                    diagnostic = f"{label}: relinker error (exit {result.returncode}): {detail}"
+                else:
+                    diagnostic = f"{label}: relinker produced no verification summary"
+                record["reason"] = "relinker_error"
+                emit(diagnostic)
+                if relinker_error is None:
+                    relinker_error = "relinker errors occurred" if result.returncode == 2 else diagnostic
+                continue
             if verified[0] == 0 or verified[1] != verified[0] or verified[2] or verified[3]:
                 record["reason"] = "verification_unconfirmed"
                 emit(f"{label}: rejected: relinker did not confirm every patch")
@@ -380,9 +381,9 @@ def main(argv=None):
         if len(matches) > 1:
             emit("No recommendation: multiple verified catalog entries match; use --list-verified to see them.")
             return finish(1, "multiple_matches")
-        if relinker_errors:
+        if relinker_error is not None:
             emit(f"{prefix}: relinker errors occurred; see catalog entries above.", file=sys.stderr)
-            return finish(2, "error", "relinker errors occurred")
+            return finish(2, "error", relinker_error)
         emit(f"{prefix}: no catalog entry passed all checks.")
         return finish(1, "rejected")
     except (OSError, ValueError, RecursionError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:

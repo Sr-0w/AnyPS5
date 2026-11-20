@@ -151,7 +151,20 @@ class PatchAdvisorJsonTests(unittest.TestCase):
                 code, data = self.run_json(return_value=process)
                 self.assertEqual((code, data["status"]), (2, "error"))
                 self.assertIn(expected_error, data["error"])
-                self.assertNotIn("reason", data["entries"][0])
+                self.assertEqual(data["entries"][0]["reason"], "relinker_error")
+
+    def test_verifier_errors_do_not_hide_later_verified_entries(self):
+        self.write_index([self.entry, self.entry, self.entry, self.entry])
+        missing_summary = subprocess.CompletedProcess([], 0, "unrecognized verifier\n", "")
+        crash = subprocess.CompletedProcess([], 3, "", "crash\n")
+        invalid_option = subprocess.CompletedProcess([], 1, "", "FAIL: invalid option\n")
+        verified = subprocess.CompletedProcess([], 0, VERIFIED, "")
+        code, data = self.run_json(side_effect=[missing_summary, crash, invalid_option, verified])
+        self.assertEqual((code, data["status"]), (0, "recommended"))
+        self.assertEqual(data["recommended_entry"], 4)
+        for record, exit_code in zip(data["entries"][:3], (0, 3, 1)):
+            self.assertEqual((record["status"], record["reason"]), ("rejected", "relinker_error"))
+            self.assertEqual(record["verification"]["exit_code"], exit_code)
 
     def test_json_conversion_options_preserve_repeated_arguments_and_spaces(self):
         self.additional_executable()
